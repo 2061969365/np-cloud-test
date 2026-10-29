@@ -39,11 +39,15 @@ jobs:
             if ($p.HasExited) { Write-Host "client exited rc=$($p.ExitCode)"; break }
           }
           if (-not $ok) { Write-Host 'TUN NOT READY' }
+          Get-NetAdapter -Name natpierce-cli | Format-Table Name,Status,ifIndex -AutoSize
+          route print -4 | Select-String -Pattern '10.6.22|natpierce|Interface List|Active Routes' -Context 0,2
       - name: ping and tcp through tunnel
         shell: pwsh
         run: |
           Write-Host '=== ping 10.6.22.1 (tunnel) ==='
           ping -n 6 10.6.22.1
+          Write-Host '=== ping -S 10.6.22.2 ==='
+          ping -n 3 -S 10.6.22.2 10.6.22.1
           Write-Host '=== tcp 10.6.22.1:47989 (Sunshine) ==='
           $r = Test-NetConnection 10.6.22.1 -Port 47989 -InformationLevel Quiet -WarningAction SilentlyContinue
           Write-Host "TCP47989=$r"
