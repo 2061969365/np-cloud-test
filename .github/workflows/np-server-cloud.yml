@@ -1,0 +1,24 @@
+name: np-server-cloud
+on: workflow_dispatch
+jobs:
+  s:
+    runs-on: windows-latest
+    timeout-minutes: 8
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: 'utf-8'
+      NP_PCID: '685007'
+      NP_NAME: 'NPCLOUD'
+      NP_DURATION: '180'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: 2061969365/natpierce-re
+          token: ${{ secrets.NP_REPO_TOKEN }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pycryptodome
+      - name: run callee
+        working-directory: tools
+        run: python -u np_server.py
