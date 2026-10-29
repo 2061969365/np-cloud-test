@@ -26,9 +26,10 @@ jobs:
         run: |
           netsh advfirewall set allprofiles state off
           netsh advfirewall show allprofiles state
-      - name: start client with TUN
+      - name: start client, route check, ping and tcp (same step keeps client alive)
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Continue'
           $p = Start-Process python -ArgumentList '-u','tools/np_client.py' -PassThru -RedirectStandardOutput client.log -RedirectStandardError client.err
           $p.Id | Out-File client.pid
           $ok = $false
@@ -42,43 +43,34 @@ jobs:
             }
             if ($p.HasExited) { Write-Host "client exited rc=$($p.ExitCode)"; break }
           }
-          if (-not $ok) { Write-Host 'TUN NOT READY' }
+          if (-not $ok) {
+            Write-Host 'TUN NOT READY'
+            Get-Content client.log -Tail 60 -ErrorAction SilentlyContinue
+            Get-Content client.err -Tail 40 -ErrorAction SilentlyContinue
+            exit 1
+          }
           Get-NetAdapter -Name natpierce-cli | Format-Table Name,Status,ifIndex,MediaConnectionState -AutoSize
-          Get-NetIPAddress -IPAddress 10.6.22.2 | Format-List IPAddress,PrefixLength,AddressState,PrefixOrigin,SuffixOrigin,InterfaceIndex,InterfaceAlias,SkipAsSource
-          Get-NetIPInterface -InterfaceAlias natpierce-cli -AddressFamily IPv4 | Format-List InterfaceAlias,InterfaceIndex,InterfaceMetric,NlMtu,ConnectionState,DadState
-          Write-Host '=== Find-NetRoute 10.6.22.1 (before) ==='
-          Find-NetRoute -RemoteIPAddress 10.6.22.1 -ErrorAction SilentlyContinue | Format-List *
-          Write-Host '=== routes 10.6.22 (before) ==='
+          Get-NetIPAddress -IPAddress 10.6.22.2 | Format-List IPAddress,PrefixLength,AddressState,InterfaceIndex,InterfaceAlias
+          Get-NetIPInterface -InterfaceAlias natpierce-cli -AddressFamily IPv4 | Format-List InterfaceIndex,InterfaceMetric,NlMtu,ConnectionState,DadState
+          Write-Host '=== routes 10.6.22 (client-produced) ==='
           Get-NetRoute -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.DestinationPrefix -like '10.6.22*' } | Sort-Object DestinationPrefix,RouteMetric | Format-Table -AutoSize
-          Write-Host '=== client.log (post-TUN) ==='
-          Get-Content client.log -Tail 40
-      - name: ping and tcp through tunnel
-        shell: pwsh
-        run: |
-          Write-Host '=== ping 10.6.22.1 (before route fix) ==='
-          ping -n 2 10.6.22.1
-          Write-Host '=== remove gateway route, force on-link metric 1 ==='
-          route delete 10.6.22.0 mask 255.255.255.0 10.6.22.1 2>&1 | Write-Host
-          $idx = (Get-NetAdapter -Name natpierce-cli).ifIndex
-          route add 10.6.22.0 mask 255.255.255.0 0.0.0.0 if $idx metric 1 2>&1 | Write-Host
-          Get-NetRoute -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.DestinationPrefix -like '10.6.22*' } | Sort-Object DestinationPrefix,RouteMetric | Format-Table -AutoSize
+          Write-Host '=== Find-NetRoute 10.6.22.1 ==='
           Find-NetRoute -RemoteIPAddress 10.6.22.1 -ErrorAction SilentlyContinue | Format-List *
-          Write-Host '=== ping 10.6.22.1 (after route fix) ==='
+          Write-Host '=== ping 10.6.22.1 ==='
           ping -n 4 10.6.22.1
+          $pingRc = $LASTEXITCODE
           Write-Host '=== ping -S 10.6.22.2 ==='
           ping -n 2 -S 10.6.22.2 10.6.22.1
           Write-Host '=== tcp 10.6.22.1:47989 (Sunshine) ==='
           $r = Test-NetConnection 10.6.22.1 -Port 47989 -InformationLevel Quiet -WarningAction SilentlyContinue
           Write-Host "TCP47989=$r"
-          if (-not $r) {
-            Write-Host '=== retry: delete all 10.6.22 routes, add on-link, ping ==='
-            route delete 10.6.22.0 2>&1 | Write-Host
-            route add 10.6.22.0 mask 255.255.255.0 0.0.0.0 if $idx metric 1 2>&1 | Write-Host
-            ping -n 2 10.6.22.1
-            $r = Test-NetConnection 10.6.22.1 -Port 47989 -InformationLevel Quiet -WarningAction SilentlyContinue
-            Write-Host "TCP47989_retry=$r"
-          }
-      - name: client logs
+          Write-Host "PINGRC=$pingRc"
+          Write-Host '=== client.log ==='
+          Get-Content client.log -Tail 80 -ErrorAction SilentlyContinue
+          Write-Host '=== client.err ==='
+          Get-Content client.err -Tail 40 -ErrorAction SilentlyContinue
+          if ($pingRc -ne 0 -or -not $r) { exit 1 }
+      - name: client logs (after step)
         if: always()
         shell: pwsh
         run: |
