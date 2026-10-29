@@ -1,0 +1,54 @@
+name: np-client-tun
+on: workflow_dispatch
+jobs:
+  c:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: 'utf-8'
+      NP_CPCID: '685006'
+      NP_PCID: '685005'
+      NP_CODE: '91505506'
+      NP_CONPWD: 'qaz123wsx456'
+      NP_WATCH: '150'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: 2061969365/natpierce-re
+          token: ${{ secrets.NP_REPO_TOKEN }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pycryptodome
+      - name: start client with TUN
+        shell: pwsh
+        run: |
+          $p = Start-Process python -ArgumentList '-u','tools/np_client.py' -PassThru -RedirectStandardOutput client.log -RedirectStandardError client.err
+          $p.Id | Out-File client.pid
+          $ok = $false
+          for ($i = 0; $i -lt 45; $i++) {
+            Start-Sleep -Seconds 2
+            $ip = Get-NetIPAddress -IPAddress 10.6.22.2 -ErrorAction SilentlyContinue
+            if ($ip) { Write-Host "TUN READY: $($ip.IPAddress)/$($ip.PrefixLength) on $($ip.InterfaceAlias)"; $ok = $true; break }
+            if ($p.HasExited) { Write-Host "client exited rc=$($p.ExitCode)"; break }
+          }
+          if (-not $ok) { Write-Host 'TUN NOT READY' }
+      - name: ping and tcp through tunnel
+        shell: pwsh
+        run: |
+          Write-Host '=== ping 10.6.22.1 (tunnel) ==='
+          ping -n 6 10.6.22.1
+          Write-Host '=== tcp 10.6.22.1:47989 (Sunshine) ==='
+          $r = Test-NetConnection 10.6.22.1 -Port 47989 -InformationLevel Quiet -WarningAction SilentlyContinue
+          Write-Host "TCP47989=$r"
+          Write-Host '=== route ==='
+          Get-NetRoute -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.DestinationPrefix -like '10.6.22*' } | Format-Table -AutoSize
+      - name: client logs
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host '=== client.log ==='
+          Get-Content client.log -Tail 120 -ErrorAction SilentlyContinue
+          Write-Host '=== client.err ==='
+          Get-Content client.err -Tail 40 -ErrorAction SilentlyContinue
