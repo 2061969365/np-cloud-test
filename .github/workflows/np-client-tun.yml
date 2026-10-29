@@ -21,6 +21,11 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install pycryptodome
+      - name: open firewall for punch
+        shell: pwsh
+        run: |
+          netsh advfirewall set allprofiles state off
+          netsh advfirewall show allprofiles state
       - name: start client with TUN
         shell: pwsh
         run: |
