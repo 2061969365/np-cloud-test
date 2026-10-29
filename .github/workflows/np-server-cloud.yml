@@ -7,9 +7,9 @@ jobs:
     env:
       PYTHONUTF8: '1'
       PYTHONIOENCODING: 'utf-8'
-      NP_PCID: '685007'
+      NP_PCID: '685005'
       NP_NAME: 'NPCLOUD'
-      NP_DURATION: '180'
+      NP_DURATION: '240'
     steps:
       - uses: actions/checkout@v4
         with:
