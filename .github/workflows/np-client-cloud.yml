@@ -1,0 +1,27 @@
+name: np-client-cloud
+on: workflow_dispatch
+jobs:
+  c:
+    runs-on: windows-latest
+    timeout-minutes: 8
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: 'utf-8'
+      NP_PCID: '685006'
+      NP_PEER_PCID: '685005'
+      NP_CODE: '91505506'
+      NP_CONPWD: 'qaz123wsx456'
+      NP_UDP_PORT: '40100'
+      NP_DURATION: '75'
+      NP_LAN: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: 2061969365/natpierce-re
+          token: ${{ secrets.NP_REPO_TOKEN }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pycryptodome
+      - name: run client
+        run: python tools/map_client_cloud.py
