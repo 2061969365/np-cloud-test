@@ -1,0 +1,89 @@
+name: official-connect
+on:
+  workflow_dispatch:
+    inputs:
+      code:
+        description: '被控端识别码'
+        required: false
+        default: '91505506'
+      conpwd:
+        description: '连接密码'
+        required: false
+        default: 'qaz123wsx456'
+jobs:
+  official:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: 'utf-8'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: 2061969365/natpierce-re
+          token: ${{ secrets.NP_REPO_TOKEN }}
+
+      - name: start capture
+        shell: pwsh
+        run: |
+          pktmon filter remove
+          pktmon filter add -t UDP
+          pktmon start --capture --pkt-size 0 --file-name C:\cap.etl
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: start official client
+        shell: pwsh
+        run: |
+          Start-Process -FilePath "$PWD\official\natpierce.exe" -WorkingDirectory "$PWD\official"
+          Start-Sleep -Seconds 20
+          Get-Process natpierce -ErrorAction SilentlyContinue | Select-Object Id,ProcessName
+          Test-NetConnection -ComputerName 127.0.0.1 -Port 33272 -WarningAction SilentlyContinue -InformationLevel Quiet
+
+      - name: drive panel (login + connect by code + watch)
+        continue-on-error: true
+        shell: pwsh
+        env:
+          NP_CODE: ${{ inputs.code }}
+          NP_CONPWD: ${{ inputs.conpwd }}
+          NP_WATCH: '120'
+        run: python tools/panel_connect.py
+
+      - name: process alive check
+        shell: pwsh
+        run: |
+          Get-Process natpierce -ErrorAction SilentlyContinue | Select-Object Id,ProcessName,StartTime
+          Get-NetTCPConnection -State Established -ErrorAction SilentlyContinue |
+            Where-Object { $_.RemotePort -eq 58717 } | Select-Object LocalAddress,LocalPort,RemoteAddress,RemotePort
+
+      - name: second drive (reconnect attempt)
+        continue-on-error: true
+        shell: pwsh
+        env:
+          NP_CODE: ${{ inputs.code }}
+          NP_CONPWD: ${{ inputs.conpwd }}
+          NP_WATCH: '60'
+        run: python tools/panel_connect.py
+
+      - name: vpn data test (ping + tcp echo)
+        shell: pwsh
+        run: |
+          Write-Host '--- ping 10.6.22.1 ---'
+          ping -n 4 10.6.22.1
+          Write-Host '--- tcp echo ---'
+          python tools/vpn_client_test.py
+
+      - name: stop capture and convert
+        if: always()
+        shell: pwsh
+        run: |
+          pktmon stop
+          pktmon etl2pcap C:\cap.etl -o C:\cap.pcap
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cap
+          path: C:\cap.pcap
