@@ -43,6 +43,7 @@ jobs:
         with:
           repository: 2061969365/natpierce-re
           token: ${{ secrets.NP_REPO_TOKEN }}
+          ref: main
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
