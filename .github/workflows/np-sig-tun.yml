@@ -1,0 +1,102 @@
+name: np-sig-tun
+on:
+  workflow_dispatch:
+    inputs:
+      sig_url:
+        description: signaling base URL
+        required: false
+        default: https://npsig.xia2061969365.workers.dev
+      sig_device:
+        description: runner device id
+        required: false
+        default: nprun01
+      sig_target:
+        description: server device id
+        required: false
+        default: npsrv01
+      sig_code:
+        description: connect code
+        required: false
+        default: '91505506'
+      watch_seconds:
+        description: client NP_WATCH seconds
+        required: false
+        default: '150'
+jobs:
+  c:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: 'utf-8'
+      NP_SIG_URL: ${{ inputs.sig_url }}
+      NP_SIG_DEVICE: ${{ inputs.sig_device }}
+      NP_SIG_TARGET: ${{ inputs.sig_target }}
+      NP_SIG_CODE: ${{ inputs.sig_code }}
+      NP_SIG_TOKEN: ${{ secrets.NP_SIG_TOKEN }}
+      NP_WATCH: ${{ inputs.watch_seconds }}
+      NP_HS_TIMEOUT: '90'
+      NP_CPCID: '685006'
+      NP_PCID: '685005'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: 2061969365/natpierce-re
+          token: ${{ secrets.NP_REPO_TOKEN }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pycryptodome
+      - name: open firewall for punch
+        shell: pwsh
+        run: |
+          netsh advfirewall set allprofiles state off
+          netsh advfirewall show allprofiles state
+      - name: start sig client, wait READY, ping and tcp
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          Write-Host "SIG_URL=$env:NP_SIG_URL DEVICE=$env:NP_SIG_DEVICE TARGET=$env:NP_SIG_TARGET"
+          $p = Start-Process python -ArgumentList '-u','tools/np_client.py' -PassThru -RedirectStandardOutput client.log -RedirectStandardError client.err
+          $p.Id | Out-File client.pid
+          $ok = $false
+          for ($i = 0; $i -lt 60; $i++) {
+            Start-Sleep -Seconds 2
+            $log = Get-Content client.log -Raw -ErrorAction SilentlyContinue
+            if ($log -match 'READY tun=') { $ok = $true; break }
+            if ($p.HasExited) { Write-Host "client exited rc=$($p.ExitCode)"; break }
+          }
+          Write-Host '=== client early log ==='
+          Get-Content client.log -Tail 30 -ErrorAction SilentlyContinue
+          if (-not $ok) {
+            Write-Host 'SIG TUN NOT READY'
+            Get-Content client.log -Tail 120 -ErrorAction SilentlyContinue
+            Get-Content client.err -Tail 60 -ErrorAction SilentlyContinue
+            exit 1
+          }
+          Get-NetAdapter -Name natpierce-cli | Format-Table Name,Status,ifIndex,MediaConnectionState -AutoSize
+          Get-NetIPAddress -IPAddress 10.6.22.2 | Format-List IPAddress,PrefixLength,AddressState,InterfaceIndex,InterfaceAlias
+          Write-Host '=== routes 10.6.22 ==='
+          Get-NetRoute -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.DestinationPrefix -like '10.6.22*' } | Sort-Object DestinationPrefix,RouteMetric | Format-Table -AutoSize
+          Write-Host '=== ping 10.6.22.1 ==='
+          ping -n 4 10.6.22.1
+          $pingRc = $LASTEXITCODE
+          Write-Host '=== tcp 10.6.22.1:47989 ==='
+          $r = Test-NetConnection 10.6.22.1 -Port 47989 -InformationLevel Quiet -WarningAction SilentlyContinue
+          Write-Host "TCP47989=$r"
+          Write-Host "PINGRC=$pingRc"
+          Write-Host '=== client.log ==='
+          Get-Content client.log -Tail 100 -ErrorAction SilentlyContinue
+          Write-Host '=== client.err ==='
+          Get-Content client.err -Tail 60 -ErrorAction SilentlyContinue
+          if ($pingRc -ne 0 -or -not $r) { exit 1 }
+      - name: upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: np-sig-tun-logs
+          path: |
+            client.log
+            client.err
+            client.pid
+          if-no-files-found: ignore
