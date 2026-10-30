@@ -1,0 +1,111 @@
+name: np-sig-direct
+on:
+  workflow_dispatch:
+    inputs:
+      sig_url:
+        description: signaling base URL
+        required: false
+        default: https://npsig.xia2061969365.workers.dev
+      to_device:
+        description: target device id (same account)
+        required: false
+        default: '59wvu8jn7'
+      watch_seconds:
+        description: client NP_WATCH seconds
+        required: false
+        default: '150'
+jobs:
+  c:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: 'utf-8'
+      NP_ACCOUNT_EMAIL: ${{ secrets.NP_DEMO_EMAIL }}
+      NP_ACCOUNT_PASSWORD: ${{ secrets.NP_DEMO_PASSWORD }}
+      NP_WATCH: ${{ inputs.watch_seconds }}
+      NP_SIG_RELAY: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: 2061969365/natpierce-re
+          token: ${{ secrets.NP_REPO_TOKEN }}
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pycryptodome
+      - name: write config
+        shell: pwsh
+        run: |
+          @{
+            mode = 'self'
+            sig = @{ url = '${{ inputs.sig_url }}' }
+            panel = @{ no_panel = $true }
+          } | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 np-account.json
+      - name: open firewall for punch
+        shell: pwsh
+        run: |
+          netsh advfirewall set allprofiles state off
+          netsh advfirewall show allprofiles state
+      - name: account login, connect and verify
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $npArgs = @('-u', 'tools/np_app.py', 'client',
+                    '--config', 'np-account.json', '--no-panel',
+                    '--to', '${{ inputs.to_device }}',
+                    '--watch', '${{ inputs.watch_seconds }}')
+          $p = Start-Process python -ArgumentList $npArgs -PassThru `
+                -RedirectStandardOutput client.log `
+                -RedirectStandardError client.err
+          $p.Id | Out-File client.pid
+          $ok = $false
+          for ($i = 0; $i -lt 75; $i++) {
+            Start-Sleep -Seconds 2
+            $log = Get-Content client.log -Raw -ErrorAction SilentlyContinue
+            if ($log -match 'READY tun=') { $ok = $true; break }
+            if ($p.HasExited) { Write-Host "client exited rc=$($p.ExitCode)"; break }
+          }
+          Write-Host '=== client early log ==='
+          Get-Content client.log -Tail 40 -ErrorAction SilentlyContinue
+          if (-not $ok) {
+            Write-Host 'ACCOUNT CONNECT NOT READY'
+            Get-Content client.log -Tail 160 -ErrorAction SilentlyContinue
+            Get-Content client.err -Tail 80 -ErrorAction SilentlyContinue
+            exit 1
+          }
+          Get-NetAdapter -Name natpierce-cli | Format-Table Name,Status,ifIndex,MediaConnectionState -AutoSize
+          Get-NetIPAddress -IPAddress 10.6.22.2 | Format-List IPAddress,PrefixLength,AddressState,InterfaceIndex,InterfaceAlias
+          Write-Host '=== routes 10.6.22 ==='
+          Get-NetRoute -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.DestinationPrefix -like '10.6.22*' } | Sort-Object DestinationPrefix,RouteMetric | Format-Table -AutoSize
+          Write-Host '=== ping 10.6.22.1 ==='
+          ping -n 4 10.6.22.1
+          $pingRc = $LASTEXITCODE
+          Write-Host '=== tcp 10.6.22.1:47989 ==='
+          $r = Test-NetConnection 10.6.22.1 -Port 47989 -InformationLevel Quiet -WarningAction SilentlyContinue
+          Write-Host "TCP47989=$r"
+          Write-Host "PINGRC=$pingRc"
+          Write-Host '=== client.log ==='
+          Get-Content client.log -Tail 120 -ErrorAction SilentlyContinue
+          Write-Host '=== client.err ==='
+          Get-Content client.err -Tail 80 -ErrorAction SilentlyContinue
+          if ($pingRc -ne 0 -or -not $r) { exit 1 }
+      - name: stop client
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path client.pid) {
+            $id = [int](Get-Content client.pid)
+            Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
+          }
+      - name: upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: np-sig-direct-logs
+          path: |
+            client.log
+            client.err
+            client.pid
+          if-no-files-found: ignore
