@@ -22,6 +22,11 @@ on:
         description: client NP_WATCH seconds
         required: false
         default: '150'
+      relay:
+        description: force WS relay (NP_SIG_RELAY=1)
+        required: false
+        type: boolean
+        default: false
 jobs:
   c:
     runs-on: windows-latest
@@ -35,6 +40,7 @@ jobs:
       NP_SIG_CODE: ${{ inputs.sig_code }}
       NP_SIG_TOKEN: ${{ secrets.NP_SIG_TOKEN }}
       NP_WATCH: ${{ inputs.watch_seconds }}
+      NP_SIG_RELAY: ${{ inputs.relay && '1' || '0' }}
       NP_HS_TIMEOUT: '90'
       NP_CPCID: '685006'
       NP_PCID: '685005'
