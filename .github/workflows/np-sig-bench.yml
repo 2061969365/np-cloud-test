@@ -18,6 +18,10 @@ on:
         description: parallel TCP streams
         required: false
         default: '1'
+      udp:
+        description: '1 = run UDP loss probe instead of TCP'
+        required: false
+        default: '0'
       ping_count:
         description: ICMP echo count
         required: false
@@ -99,11 +103,17 @@ jobs:
             Tee-Object -FilePath bench-summary.txt -Append
           $mb = '${{ inputs.size_mb }}'
           $runs = '${{ inputs.runs }}'
-          $streams = '${{ inputs.streams }}'
-          python -u tools/bench_tcp.py client --host 10.6.22.1 `
-            --down-port 9001 --up-port 9002 --mb $mb --runs $runs `
-            --streams $streams |
-            Tee-Object -FilePath bench-tcp.txt
+          if ('${{ inputs.udp }}' -eq '1') {
+            python -u tools/bench_udp.py client --host 10.6.22.1 `
+              --port 9102 --rates 200,500,1000,2000 --secs 3 --size 1200 |
+              Tee-Object -FilePath bench-udp.txt
+          } else {
+            $streams = '${{ inputs.streams }}'
+            python -u tools/bench_tcp.py client --host 10.6.22.1 `
+              --down-port 9001 --up-port 9002 --mb $mb --runs $runs `
+              --streams $streams |
+              Tee-Object -FilePath bench-tcp.txt
+          }
           Write-Host '=== client punch/relay ==='
           Get-Content client.log -ErrorAction SilentlyContinue |
             Select-String -Pattern 'punch peer|N11 punch|relay|READY tun=' |
@@ -133,6 +143,7 @@ jobs:
             client.err
             ping.txt
             bench-tcp.txt
+            bench-udp.txt
             bench-path.txt
             bench-summary.txt
           if-no-files-found: ignore
