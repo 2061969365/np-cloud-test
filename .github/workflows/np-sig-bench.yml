@@ -45,6 +45,7 @@ jobs:
       NP_ACCOUNT_PASSWORD: ${{ secrets.NP_DEMO_PASSWORD }}
       NP_WATCH: '600'
       NP_SIG_RELAY: ${{ inputs.relay }}
+      NP_SIG_DUP: '1'
     steps:
       - uses: actions/checkout@v4
         with:
