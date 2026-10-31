@@ -14,6 +14,10 @@ on:
         description: runs per direction
         required: false
         default: '2'
+      streams:
+        description: parallel TCP streams
+        required: false
+        default: '1'
       ping_count:
         description: ICMP echo count
         required: false
@@ -95,8 +99,10 @@ jobs:
             Tee-Object -FilePath bench-summary.txt -Append
           $mb = '${{ inputs.size_mb }}'
           $runs = '${{ inputs.runs }}'
+          $streams = '${{ inputs.streams }}'
           python -u tools/bench_tcp.py client --host 10.6.22.1 `
-            --down-port 9001 --up-port 9002 --mb $mb --runs $runs |
+            --down-port 9001 --up-port 9002 --mb $mb --runs $runs `
+            --streams $streams |
             Tee-Object -FilePath bench-tcp.txt
           Write-Host '=== client punch/relay ==='
           Get-Content client.log -ErrorAction SilentlyContinue |
