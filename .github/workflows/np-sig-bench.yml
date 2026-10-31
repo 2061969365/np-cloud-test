@@ -22,6 +22,10 @@ on:
         description: '1 = run UDP loss probe instead of TCP'
         required: false
         default: '0'
+      udp_rates:
+        description: UDP probe rates (pps, comma separated)
+        required: false
+        default: '200,500,1000,2000'
       ping_count:
         description: ICMP echo count
         required: false
@@ -105,7 +109,7 @@ jobs:
           $runs = '${{ inputs.runs }}'
           if ('${{ inputs.udp }}' -eq '1') {
             python -u tools/bench_udp.py client --host 10.6.22.1 `
-              --port 9102 --rates 200,500,1000,2000 --secs 3 --size 1200 |
+              --port 9102 --rates ${{ inputs.udp_rates }} --secs 3 --size 1200 |
               Tee-Object -FilePath bench-udp.txt
           } else {
             $streams = '${{ inputs.streams }}'
