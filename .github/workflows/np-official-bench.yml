@@ -1,0 +1,204 @@
+name: np-official-bench
+on:
+  workflow_dispatch:
+    inputs:
+      size_mb:
+        description: payload per TCP run (MB)
+        required: false
+        default: '10'
+      runs:
+        description: runs per direction
+        required: false
+        default: '1'
+      streams:
+        description: parallel TCP streams
+        required: false
+        default: '1'
+      ping_count:
+        description: ICMP echo count
+        required: false
+        default: '5'
+      target_pcid:
+        description: official callee pcid (live np-app-serve)
+        required: false
+        default: '972267'
+      cpcid:
+        description: this runner's own client pcid
+        required: false
+        default: '770001'
+jobs:
+  bench:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: 'utf-8'
+      NP_FEC: '1'
+    steps:
+      - name: checkout tools
+        uses: actions/checkout@v4
+        with:
+          repository: 2061969365/natpierce-re
+          token: ${{ secrets.NP_REPO_TOKEN }}
+          ref: main
+          path: tools-src
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: install deps
+        shell: pwsh
+        run: pip install pycryptodome
+      - name: write client config (working copy, secret not committed)
+        shell: pwsh
+        env:
+          NP_OFFICIAL_PASSWORD_ENC: ${{ secrets.NP_OFFICIAL_PASSWORD_ENC }}
+        run: |
+          if (-not $env:NP_OFFICIAL_PASSWORD_ENC) {
+            Write-Host 'NP_OFFICIAL_PASSWORD_ENC secret is empty'
+            exit 1
+          }
+          $cfg = @{
+            mode = 'official'
+            role = 'client'
+            official = @{
+              account      = '2061969365@qq.com'
+              pcname       = 'Runner'
+              password_enc = $env:NP_OFFICIAL_PASSWORD_ENC
+              pcid         = '${{ inputs.cpcid }}'
+            }
+            client = @{
+              pcid       = '${{ inputs.target_pcid }}'
+              cpcid      = '${{ inputs.cpcid }}'
+              vpn_ip     = '10.6.22.2'
+              peer_vpn   = '10.6.22.1'
+              tun_name   = 'natpierce-cli'
+              tun_mtu    = 1500
+            }
+            panel = @{ no_panel = $true }
+          }
+          $cfg | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 client.json
+          $keys = (Get-Content client.json -Raw | ConvertFrom-Json)
+          Write-Host ("config mode={0} role={1} target={2} cpcid={3} vpn={4} peer={5} tun={6} mtu={7} no_panel={8} pwd_len={9}" -f `
+            $keys.mode, $keys.role, $keys.client.pcid, $keys.client.cpcid, `
+            $keys.client.vpn_ip, $keys.client.peer_vpn, $keys.client.tun_name, `
+            $keys.client.tun_mtu, $keys.panel.no_panel, $keys.official.password_enc.Length)
+      - name: connect ping and bench (single step keeps client alive)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          netsh advfirewall set allprofiles state off | Out-Null
+
+          $npArgs = @('-u', 'tools-src/tools/np_app.py', 'client', '--config', 'client.json')
+          $p = Start-Process python -ArgumentList $npArgs -PassThru `
+                -RedirectStandardOutput client.log -RedirectStandardError client.err
+          $p.Id | Out-File client.pid
+          Write-Host "CLIENT pid=$($p.Id)"
+
+          $mb = '${{ inputs.size_mb }}'
+          $runs = '${{ inputs.runs }}'
+          $streams = '${{ inputs.streams }}'
+          $pingCount = [int]'${{ inputs.ping_count }}'
+
+          $ready = $false
+          $reach = $false
+          $deadline = (Get-Date).AddSeconds(120)
+          while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 2
+            if (-not $ready) {
+              $log = Get-Content client.log -Raw -ErrorAction SilentlyContinue
+              if ($log -match 'READY tun=') { $ready = $true }
+            }
+            if ($ready) {
+              ping -n 1 -w 1000 10.6.22.1 | Out-Null
+              if ($LASTEXITCODE -eq 0) { $reach = $true; break }
+            }
+            if ($p.HasExited) {
+              Write-Host "client exited rc=$($p.ExitCode)"
+              break
+            }
+          }
+          Write-Host "READY=$ready PEER_REACHABLE=$reach"
+          if (-not $ready -or -not $reach) {
+            Write-Host '=== client.log (tail 120) ==='
+            Get-Content client.log -Tail 120 -ErrorAction SilentlyContinue
+            Write-Host '=== client.err (tail 80) ==='
+            Get-Content client.err -Tail 80 -ErrorAction SilentlyContinue
+            exit 1
+          }
+
+          Write-Host '=== TUN / route ==='
+          Get-NetAdapter -Name natpierce-cli -ErrorAction SilentlyContinue |
+            Format-Table Name,Status,ifIndex,MediaConnectionState -AutoSize
+          Get-NetIPAddress -IPAddress 10.6.22.2 -ErrorAction SilentlyContinue |
+            Format-List IPAddress,PrefixLength,AddressState,InterfaceIndex,InterfaceAlias
+          Get-NetIPInterface -InterfaceAlias natpierce-cli -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Format-List InterfaceIndex,InterfaceMetric,NlMtu,ConnectionState,DadState
+          Get-NetRoute -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object { $_.DestinationPrefix -like '10.6.22*' } |
+            Sort-Object DestinationPrefix,RouteMetric | Format-Table -AutoSize
+
+          Write-Host "=== ping $pingCount 10.6.22.1 ==="
+          ping -n $pingCount -w 1000 10.6.22.1 | Tee-Object -FilePath ping.txt
+          $text = Get-Content ping.txt -Raw
+          $loss = [regex]::Match($text, 'Lost = (\d+) \((\d+)% loss\)')
+          $stat = [regex]::Match($text, 'Minimum = (\d+)ms, Maximum = (\d+)ms, Average = (\d+)ms')
+          $lost = if ($loss.Success) { $loss.Groups[1].Value } else { '?' }
+          $pct = if ($loss.Success) { $loss.Groups[2].Value } else { '?' }
+          $min = if ($stat.Success) { $stat.Groups[1].Value } else { '?' }
+          $max = if ($stat.Success) { $stat.Groups[2].Value } else { '?' }
+          $avg = if ($stat.Success) { $stat.Groups[3].Value } else { '?' }
+          "PING lost=$lost pct=$pct min_ms=$min max_ms=$max avg_ms=$avg" |
+            Tee-Object -FilePath bench-summary.txt -Append
+
+          Write-Host "=== bench ${mb}MB runs=$runs streams=$streams ==="
+          python -u tools-src/tools/bench_tcp.py client --host 10.6.22.1 `
+            --down-port 9001 --up-port 9002 --mb $mb --runs $runs `
+            --streams $streams --timeout 120 |
+            Tee-Object -FilePath bench-tcp.txt
+
+          Write-Host '=== client login/path lines ==='
+          Get-Content client.log -ErrorAction SilentlyContinue |
+            Select-String -Pattern 'OFFICIAL|LOGIN|device|ZJOK|PEER|HS DONE|READY|relay|punch|direct|KCP|FEC|VIPEND|ERROR|BUSY' |
+            Tee-Object -FilePath bench-path.txt
+
+          $pathText = Get-Content bench-path.txt -Raw -ErrorAction SilentlyContinue
+          if ($pathText -match 'relay') {
+            'PATH relay' | Tee-Object -FilePath bench-summary.txt -Append
+          } elseif ($pathText -match 'ZJOK|PEER |READY tun=') {
+            'PATH direct' | Tee-Object -FilePath bench-summary.txt -Append
+          } else {
+            'PATH unknown' | Tee-Object -FilePath bench-summary.txt -Append
+          }
+
+          Write-Host '=== SUMMARY ==='
+          Get-Content bench-summary.txt
+          Get-Content bench-tcp.txt | Select-String -Pattern 'RESULT|SUMMARY'
+
+          if ($p.HasExited) {
+            Write-Host "client exited early rc=$($p.ExitCode)"
+            Get-Content client.err -Tail 80 -ErrorAction SilentlyContinue
+            exit 1
+          }
+      - name: stop client
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path client.pid) {
+            $id = [int](Get-Content client.pid)
+            Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
+          }
+          Get-NetAdapter -Name natpierce-cli -ErrorAction SilentlyContinue |
+            Format-Table Name,Status,ifIndex -AutoSize
+      - name: upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: np-official-bench-logs
+          path: |
+            client.log
+            client.err
+            ping.txt
+            bench-tcp.txt
+            bench-path.txt
+            bench-summary.txt
+          if-no-files-found: ignore
