@@ -56,7 +56,7 @@ jobs:
         run: |
           netsh advfirewall set allprofiles state off
           netsh advfirewall show allprofiles state
-      - name: connect
+      - name: connect and benchmark
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
@@ -76,15 +76,11 @@ jobs:
             if ($p.HasExited) { Write-Host "client exited rc=$($p.ExitCode)"; break }
           }
           Write-Host "READY=$ok"
+          Get-Content client.log -Tail 30 -ErrorAction SilentlyContinue
           if (-not $ok) {
-            Get-Content client.log -Tail 160 -ErrorAction SilentlyContinue
             Get-Content client.err -Tail 80 -ErrorAction SilentlyContinue
             exit 1
           }
-          Get-Content client.log -Tail 30 -ErrorAction SilentlyContinue
-      - name: ping loss and latency
-        shell: pwsh
-        run: |
           $n = [int]'${{ inputs.ping_count }}'
           ping -n $n -w 1000 10.6.22.1 | Tee-Object ping.txt
           $text = Get-Content ping.txt -Raw
@@ -97,9 +93,6 @@ jobs:
           $avg = if ($stat.Success) { $stat.Groups[3].Value } else { '?' }
           "PING lost=$lost pct=$pct min_ms=$min max_ms=$max avg_ms=$avg" |
             Tee-Object -FilePath bench-summary.txt -Append
-      - name: tcp benchmark
-        shell: pwsh
-        run: |
           $mb = '${{ inputs.size_mb }}'
           $runs = '${{ inputs.runs }}'
           python -u tools/bench_tcp.py client --host 10.6.22.1 `
@@ -115,6 +108,7 @@ jobs:
             'PATH direct' | Tee-Object -FilePath bench-summary.txt -Append
           }
           Get-Content bench-summary.txt
+          if ($lost -eq $n) { exit 1 }
       - name: stop client
         if: always()
         shell: pwsh
