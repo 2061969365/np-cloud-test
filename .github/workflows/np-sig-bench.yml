@@ -1,0 +1,138 @@
+name: np-sig-bench
+on:
+  workflow_dispatch:
+    inputs:
+      relay:
+        description: '1 = force WS relay, 0 = n11 punch'
+        required: true
+        default: '0'
+      size_mb:
+        description: payload per TCP run (MB)
+        required: false
+        default: '10'
+      runs:
+        description: runs per direction
+        required: false
+        default: '2'
+      ping_count:
+        description: ICMP echo count
+        required: false
+        default: '100'
+      to_device:
+        description: target self-hosted device id
+        required: false
+        default: '59wvu8jn7'
+jobs:
+  bench:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: 'utf-8'
+      NP_ACCOUNT_EMAIL: ${{ secrets.NP_DEMO_EMAIL }}
+      NP_ACCOUNT_PASSWORD: ${{ secrets.NP_DEMO_PASSWORD }}
+      NP_WATCH: '600'
+      NP_SIG_RELAY: ${{ inputs.relay }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: 2061969365/natpierce-re
+          token: ${{ secrets.NP_REPO_TOKEN }}
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pycryptodome
+      - name: write config
+        shell: pwsh
+        run: |
+          @{
+            mode = 'self'
+            sig = @{ url = 'https://npsig.xia2061969365.workers.dev' }
+            panel = @{ no_panel = $true }
+          } | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 np-account.json
+      - name: open firewall for punch
+        shell: pwsh
+        run: |
+          netsh advfirewall set allprofiles state off
+          netsh advfirewall show allprofiles state
+      - name: connect
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $npArgs = @('-u', 'tools/np_app.py', 'client',
+                    '--config', 'np-account.json', '--no-panel',
+                    '--to', '${{ inputs.to_device }}',
+                    '--watch', '600')
+          $p = Start-Process python -ArgumentList $npArgs -PassThru `
+                -RedirectStandardOutput client.log `
+                -RedirectStandardError client.err
+          $p.Id | Out-File client.pid
+          $ok = $false
+          for ($i = 0; $i -lt 90; $i++) {
+            Start-Sleep -Seconds 2
+            $log = Get-Content client.log -Raw -ErrorAction SilentlyContinue
+            if ($log -match 'READY tun=') { $ok = $true; break }
+            if ($p.HasExited) { Write-Host "client exited rc=$($p.ExitCode)"; break }
+          }
+          Write-Host "READY=$ok"
+          if (-not $ok) {
+            Get-Content client.log -Tail 160 -ErrorAction SilentlyContinue
+            Get-Content client.err -Tail 80 -ErrorAction SilentlyContinue
+            exit 1
+          }
+          Get-Content client.log -Tail 30 -ErrorAction SilentlyContinue
+      - name: ping loss and latency
+        shell: pwsh
+        run: |
+          $n = [int]'${{ inputs.ping_count }}'
+          ping -n $n -w 1000 10.6.22.1 | Tee-Object ping.txt
+          $text = Get-Content ping.txt -Raw
+          $loss = [regex]::Match($text, 'Lost = (\d+) \((\d+)% loss\)')
+          $stat = [regex]::Match($text, 'Minimum = (\d+)ms, Maximum = (\d+)ms, Average = (\d+)ms')
+          $lost = if ($loss.Success) { $loss.Groups[1].Value } else { '?' }
+          $pct = if ($loss.Success) { $loss.Groups[2].Value } else { '?' }
+          $min = if ($stat.Success) { $stat.Groups[1].Value } else { '?' }
+          $max = if ($stat.Success) { $stat.Groups[2].Value } else { '?' }
+          $avg = if ($stat.Success) { $stat.Groups[3].Value } else { '?' }
+          "PING lost=$lost pct=$pct min_ms=$min max_ms=$max avg_ms=$avg" |
+            Tee-Object -FilePath bench-summary.txt -Append
+      - name: tcp benchmark
+        shell: pwsh
+        run: |
+          $mb = '${{ inputs.size_mb }}'
+          $runs = '${{ inputs.runs }}'
+          python -u tools/bench_tcp.py client --host 10.6.22.1 `
+            --down-port 9001 --up-port 9002 --mb $mb --runs $runs |
+            Tee-Object -FilePath bench-tcp.txt
+          Write-Host '=== client punch/relay ==='
+          Get-Content client.log -ErrorAction SilentlyContinue |
+            Select-String -Pattern 'punch peer|N11 punch|relay|READY tun=' |
+            Tee-Object -FilePath bench-path.txt
+          if ((Get-Content bench-path.txt -Raw) -match 'relay') {
+            'PATH relay' | Tee-Object -FilePath bench-summary.txt -Append
+          } else {
+            'PATH direct' | Tee-Object -FilePath bench-summary.txt -Append
+          }
+          Get-Content bench-summary.txt
+      - name: stop client
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path client.pid) {
+            $id = [int](Get-Content client.pid)
+            Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
+          }
+      - name: upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: np-sig-bench-logs
+          path: |
+            client.log
+            client.err
+            ping.txt
+            bench-tcp.txt
+            bench-path.txt
+            bench-summary.txt
+          if-no-files-found: ignore
