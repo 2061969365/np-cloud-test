@@ -22,6 +22,10 @@ on:
         description: official callee pcid (live np-app-serve)
         required: false
         default: '972267'
+      target_code:
+        description: official callee 8-digit connect code (@csok f[7])
+        required: false
+        default: '07047013'
       cpcid:
         description: this runner's own client pcid
         required: false
@@ -68,6 +72,7 @@ jobs:
             }
             client = @{
               pcid       = '${{ inputs.target_pcid }}'
+              code       = '${{ inputs.target_code }}'
               cpcid      = '${{ inputs.cpcid }}'
               vpn_ip     = '10.6.22.2'
               peer_vpn   = '10.6.22.1'
