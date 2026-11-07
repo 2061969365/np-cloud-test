@@ -1,0 +1,43 @@
+name: np-sniff
+on: workflow_dispatch
+jobs:
+  s:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: 'utf-8'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: 2061969365/natpierce-re
+          token: ${{ secrets.NP_REPO_TOKEN }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pycryptodome
+      - name: start capture
+        shell: pwsh
+        run: |
+          pktmon filter remove
+          pktmon filter add -p 58717 -t TCP
+          pktmon start --capture --pkt-size 0 --file-name C:\cap.etl
+      - name: start official client
+        shell: pwsh
+        run: |
+          Start-Process -FilePath "$PWD\official\natpierce.exe" -WorkingDirectory "$PWD\official"
+          Start-Sleep -Seconds 45
+          Get-Process natpierce -ErrorAction SilentlyContinue | Select-Object Id,ProcessName
+      - name: stop capture and decrypt
+        if: always()
+        shell: pwsh
+        run: |
+          Start-Sleep -Seconds 5
+          pktmon stop
+          pktmon etl2pcap C:\cap.etl -o C:\cap.pcap
+          python tools/ctrl_sniff.py C:\cap.pcap
+      - name: stop client
+        if: always()
+        shell: pwsh
+        run: |
+          Stop-Process -Name natpierce -Force -ErrorAction SilentlyContinue
