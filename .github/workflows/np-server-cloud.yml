@@ -3,13 +3,13 @@ on: workflow_dispatch
 jobs:
   s:
     runs-on: windows-latest
-    timeout-minutes: 8
+    timeout-minutes: 10
     env:
       PYTHONUTF8: '1'
       PYTHONIOENCODING: 'utf-8'
       NP_PCID: '685005'
       NP_NAME: 'NPCLOUD'
-      NP_DURATION: '240'
+      NP_DURATION: '150'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -19,6 +19,23 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install pycryptodome
+      - name: start capture
+        shell: pwsh
+        run: |
+          pktmon filter remove
+          pktmon filter add -i 219.136.106.221 -t UDP
+          pktmon start --capture --pkt-size 128 --file-name C:\cap.etl
       - name: run callee
         working-directory: tools
         run: python -u np_server.py
+      - name: stop capture and summarize
+        if: always()
+        shell: pwsh
+        run: |
+          pktmon stop
+          pktmon etl2txt C:\cap.etl -o C:\cap.txt
+          $lines = Get-Content C:\cap.txt -ErrorAction SilentlyContinue
+          Write-Host ("TOTAL_LINES=" + @($lines).Count)
+          $hits = @($lines | Select-String '219.136.106.221')
+          Write-Host ("PEER_PACKETS=" + $hits.Count)
+          $hits | Select-Object -First 10 | ForEach-Object { Write-Host $_.Line }
