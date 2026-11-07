@@ -1,0 +1,33 @@
+name: np-official-server
+on: workflow_dispatch
+jobs:
+  srv:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: 'utf-8'
+      NT_TOPIC: 'npcode-7731'
+      NP_SRV_WATCH: '300'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: 2061969365/natpierce-re
+          token: ${{ secrets.NP_REPO_TOKEN }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: start official client
+        shell: pwsh
+        run: |
+          Start-Process -FilePath "$PWD\official\natpierce.exe" -WorkingDirectory "$PWD\official"
+          Start-Sleep -Seconds 25
+          Get-Process natpierce -ErrorAction SilentlyContinue | Select-Object Id,ProcessName
+          Test-NetConnection -ComputerName 127.0.0.1 -Port 33272 -WarningAction SilentlyContinue -InformationLevel Quiet
+      - name: drive panel (login + startServer)
+        continue-on-error: true
+        run: python tools/panel_server.py
+      - name: process alive check
+        shell: pwsh
+        run: |
+          Get-Process natpierce -ErrorAction SilentlyContinue | Select-Object Id,ProcessName,StartTime
