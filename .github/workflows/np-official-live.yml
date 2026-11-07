@@ -1,0 +1,59 @@
+name: np-official-live
+on: workflow_dispatch
+jobs:
+  s:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: 'utf-8'
+      NT_TOPIC: 'npcode-7731'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: 2061969365/natpierce-re
+          token: ${{ secrets.NP_REPO_TOKEN }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pycryptodome
+      - name: start capture
+        shell: pwsh
+        run: |
+          pktmon filter remove
+          pktmon filter add -p 58717 -t TCP
+          pktmon start --capture --pkt-size 0 --file-name C:\cap.etl
+      - name: start official client as callee
+        shell: pwsh
+        run: |
+          Start-Process -FilePath "$PWD\official\natpierce.exe" -WorkingDirectory "$PWD\official"
+          Start-Sleep -Seconds 20
+          Start-Process -FilePath "python" -ArgumentList "tools/panel_server.py","--live" -WorkingDirectory "$PWD" -NoNewWindow
+          Start-Sleep -Seconds 40
+          Get-Process natpierce -ErrorAction SilentlyContinue | Select-Object Id,ProcessName
+      - name: decrypt code and publish
+        if: always()
+        shell: pwsh
+        run: |
+          pktmon stop
+          pktmon etl2pcap C:\cap.etl -o C:\cap.pcap
+          python tools/ctrl_sniff.py C:\cap.pcap
+          $code = (Select-String -Path C:\cap.txt -Pattern 'x' -ErrorAction SilentlyContinue)
+          $out = python tools/ctrl_sniff.py C:\cap.pcap | Select-String 'S->C @csok'
+          if ($out) {
+            $line = $out.Line
+            $f = $line.Split('|')
+            Invoke-RestMethod -Method Post -Uri "https://ntfy.sh/$env:NT_TOPIC" -Body ("CODE=" + $f[7] + " PCID=" + $f[1] + " LINE=" + $line)
+          } else {
+            Invoke-RestMethod -Method Post -Uri "https://ntfy.sh/$env:NT_TOPIC" -Body "CODE=NOTFOUND"
+          }
+      - name: keep callee alive
+        if: always()
+        shell: pwsh
+        run: |
+          Start-Sleep -Seconds 300
+      - name: stop client
+        if: always()
+        shell: pwsh
+        run: |
+          Stop-Process -Name natpierce -Force -ErrorAction SilentlyContinue
