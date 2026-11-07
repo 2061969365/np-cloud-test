@@ -37,13 +37,14 @@ jobs:
         run: |
           pktmon stop
           pktmon etl2pcap C:\cap.etl -o C:\cap.pcap
-          python tools/ctrl_sniff.py C:\cap.pcap
-          $code = (Select-String -Path C:\cap.txt -Pattern 'x' -ErrorAction SilentlyContinue)
           $out = python tools/ctrl_sniff.py C:\cap.pcap | Select-String 'S->C @csok'
+          $out | ForEach-Object { Write-Host $_.Line }
           if ($out) {
-            $line = $out.Line
+            $line = ($out | Select-Object -First 1).Line
             $f = $line.Split('|')
-            Invoke-RestMethod -Method Post -Uri "https://ntfy.sh/$env:NT_TOPIC" -Body ("CODE=" + $f[7] + " PCID=" + $f[1] + " LINE=" + $line)
+            $body = "CODE=" + $f[7] + " PCID=" + $f[1] + " LINE=" + $line
+            Write-Host $body
+            Invoke-RestMethod -Method Post -Uri "https://ntfy.sh/$env:NT_TOPIC" -Body $body
           } else {
             Invoke-RestMethod -Method Post -Uri "https://ntfy.sh/$env:NT_TOPIC" -Body "CODE=NOTFOUND"
           }
@@ -51,7 +52,7 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          Start-Sleep -Seconds 300
+          Start-Sleep -Seconds 360
       - name: stop client
         if: always()
         shell: pwsh
