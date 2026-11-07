@@ -35,7 +35,13 @@ jobs:
           pktmon stop
           pktmon etl2txt C:\cap.etl -o C:\cap.txt
           $lines = Get-Content C:\cap.txt -ErrorAction SilentlyContinue
-          Write-Host ("TOTAL_LINES=" + @($lines).Count)
-          $hits = @($lines | Select-String '219.136.106.221')
-          Write-Host ("PEER_PACKETS=" + $hits.Count)
-          $hits | Select-Object -First 10 | ForEach-Object { Write-Host $_.Line }
+          $hits = @($lines | Where-Object { $_ -match '219\.136\.106\.221\.\d+' })
+          $out = @($hits | Where-Object { $_ -match '219\.136\.106\.221\.\d+ > ' })
+          $in  = @($hits | Where-Object { $_ -match '> 219\.136\.106\.221\.\d+' })
+          Write-Host ("PEER_LINES=" + $hits.Count)
+          Write-Host ("OUT_PKTS=" + $out.Count)
+          Write-Host ("IN_PKTS=" + $in.Count)
+          Write-Host "--- inbound samples ---"
+          $in | Select-Object -First 6 | ForEach-Object { Write-Host $_.Trim() }
+          Write-Host "--- outbound samples ---"
+          $out | Select-Object -First 4 | ForEach-Object { Write-Host $_.Trim() }
